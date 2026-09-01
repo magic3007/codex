@@ -283,6 +283,10 @@ pub struct MultiAgentV2ConfigToml {
     /// Expose the multi-agent v2 `wait_agent` tool.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wait_agent_enabled: Option<bool>,
+    /// Encrypt agent message arguments for OpenAI-hosted subagents. Disable this when messages
+    /// must be readable by subagents using a non-OpenAI model provider.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encrypted_messages: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub non_code_mode_only: Option<bool>,
 }

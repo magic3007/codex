@@ -59,6 +59,35 @@ fn tool_log_payload_redacts_plaintext_multi_agent_messages() {
     );
 }
 
+#[test]
+fn multi_agent_message_source_uses_encryption_metadata_across_namespaces() {
+    let call = |namespace, encrypted_function_args| ToolCall {
+        tool_name: ToolName::namespaced(namespace, "spawn_agent"),
+        call_id: "call-spawn".to_string(),
+        payload: ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+        encrypted_function_args,
+    };
+
+    assert_eq!(
+        call("external_collaboration", None).direct_source(),
+        ToolCallSource::DirectPlaintextMessage,
+    );
+    assert_eq!(
+        call("external_collaboration", Some(Vec::new())).direct_source(),
+        ToolCallSource::DirectPlaintextMessage,
+    );
+    assert_eq!(
+        call("external_collaboration", Some(vec!["message".to_string()]),).direct_source(),
+        ToolCallSource::Direct,
+    );
+    assert_eq!(
+        call("collaboration", None).direct_source(),
+        ToolCallSource::Direct,
+    );
+}
+
 impl codex_extension_api::ToolContributor for ExtensionEchoContributor {
     fn tools(
         &self,
