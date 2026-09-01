@@ -1,5 +1,6 @@
 pub use codex_api::ResponseEvent;
 use codex_protocol::error::Result;
+use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
@@ -60,10 +61,50 @@ impl Prompt {
     pub(crate) fn get_formatted_input_for_request(
         &self,
         model_info: &ModelInfo,
+        supports_agent_messages: bool,
     ) -> Vec<ResponseItem> {
         let mut input = self.input.clone();
+        if !supports_agent_messages {
+            convert_plaintext_agent_messages(&mut input);
+        }
         normalize_image_details(&mut input, model_info);
         input
+    }
+}
+
+fn convert_plaintext_agent_messages(items: &mut [ResponseItem]) {
+    for item in items {
+        let ResponseItem::AgentMessage {
+            content,
+            internal_chat_message_metadata_passthrough,
+            ..
+        } = item
+        else {
+            continue;
+        };
+        let mut text_parts = Vec::with_capacity(content.len());
+        for content_item in content.iter() {
+            match content_item {
+                AgentMessageInputContent::InputText { text } => text_parts.push(text.clone()),
+                AgentMessageInputContent::EncryptedContent { .. } => {
+                    text_parts.clear();
+                    break;
+                }
+            }
+        }
+        if text_parts.is_empty() {
+            continue;
+        }
+        *item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: text_parts.join("\n"),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: internal_chat_message_metadata_passthrough
+                .clone(),
+        };
     }
 }
 

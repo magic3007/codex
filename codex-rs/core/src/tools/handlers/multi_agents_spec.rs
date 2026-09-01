@@ -27,6 +27,7 @@ pub struct SpawnAgentToolOptions {
     pub expose_agent_type: bool,
     pub hide_agent_type_model_reasoning: bool,
     pub expose_spawn_agent_model_overrides: bool,
+    pub encrypt_messages: bool,
     pub multi_agent_version: MultiAgentVersion,
     pub usage_hint_text: Option<String>,
 }
@@ -39,6 +40,7 @@ impl Default for SpawnAgentToolOptions {
             expose_agent_type: true,
             hide_agent_type_model_reasoning: false,
             expose_spawn_agent_model_overrides: false,
+            encrypt_messages: true,
             multi_agent_version: MultiAgentVersion::Disabled,
             usage_hint_text: None,
         }
@@ -107,7 +109,8 @@ pub fn create_spawn_agent_tool_v2(
     let inherited_model_guidance = (options.expose_spawn_agent_model_overrides
         && !options.hide_agent_type_model_reasoning)
         .then_some(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE);
-    let mut properties = spawn_agent_common_properties_v2(&options.agent_type_description);
+    let mut properties =
+        spawn_agent_common_properties_v2(&options.agent_type_description, options.encrypt_messages);
     if !options.expose_agent_type {
         properties.remove("agent_type");
     }
@@ -182,7 +185,7 @@ pub fn create_send_input_tool_v1() -> ToolSpec {
     })
 }
 
-pub fn create_send_message_tool() -> ToolSpec {
+pub fn create_send_message_tool(encrypt_messages: bool) -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "target".to_string(),
@@ -192,10 +195,10 @@ pub fn create_send_message_tool() -> ToolSpec {
         ),
         (
             "message".to_string(),
-            JsonSchema::string(Some(
-                "Message text to queue on the target agent.".to_string(),
-            ))
-            .with_encrypted(),
+            agent_message_schema(
+                "Message text to queue on the target agent.",
+                encrypt_messages,
+            ),
         ),
     ]);
 
@@ -214,7 +217,7 @@ pub fn create_send_message_tool() -> ToolSpec {
     })
 }
 
-pub fn create_followup_task_tool() -> ToolSpec {
+pub fn create_followup_task_tool(encrypt_messages: bool) -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "target".to_string(),
@@ -225,10 +228,10 @@ pub fn create_followup_task_tool() -> ToolSpec {
         ),
         (
             "message".to_string(),
-            JsonSchema::string(Some(
-                "Message text to send to the target agent.".to_string(),
-            ))
-            .with_encrypted(),
+            agent_message_schema(
+                "Message text to send to the target agent.",
+                encrypt_messages,
+            ),
         ),
     ]);
 
@@ -627,14 +630,17 @@ fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<St
     ])
 }
 
-fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<String, JsonSchema> {
+fn spawn_agent_common_properties_v2(
+    agent_type_description: &str,
+    encrypt_messages: bool,
+) -> BTreeMap<String, JsonSchema> {
     BTreeMap::from([
         (
             "message".to_string(),
-            JsonSchema::string(Some(
-                "Initial plain-text task for the new agent.".to_string(),
-            ))
-            .with_encrypted(),
+            agent_message_schema(
+                "Initial plain-text task for the new agent.",
+                encrypt_messages,
+            ),
         ),
         (
             "agent_type".to_string(),
@@ -663,6 +669,15 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
             )),
         ),
     ])
+}
+
+fn agent_message_schema(description: &str, encrypt_messages: bool) -> JsonSchema {
+    let schema = JsonSchema::string(Some(description.to_string()));
+    if encrypt_messages {
+        schema.with_encrypted()
+    } else {
+        schema
+    }
 }
 
 fn hide_spawn_agent_metadata_options(properties: &mut BTreeMap<String, JsonSchema>) {
