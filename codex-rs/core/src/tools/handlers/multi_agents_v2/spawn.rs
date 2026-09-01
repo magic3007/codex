@@ -120,8 +120,8 @@ async fn handle_spawn_agent(
     let turn = &step_context.turn;
     let arguments = function_arguments(payload)?;
     let args: SpawnAgentArgs = parse_arguments(&arguments)?;
-    let fork_mode = args.fork_mode()?;
-    let message = message_content(args.message)?;
+    let mut fork_mode = args.fork_mode()?;
+    let message = message_content(args.message, &source)?;
     let role_name = args
         .agent_type
         .as_deref()
@@ -144,6 +144,15 @@ async fn handle_spawn_agent(
     .await
     .map_err(FunctionCallError::RespondToModel)?;
     let config = prepared.config;
+    if config.model_provider_id != turn.config.model_provider_id && fork_mode.is_some() {
+        if args.fork_turns.is_some() {
+            return Err(FunctionCallError::RespondToModel(
+                "Cross-provider agents can't inherit parent history; use fork_turns=\"none\""
+                    .to_string(),
+            ));
+        }
+        fork_mode = None;
+    }
     let is_full_history_fork = matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory));
     let spawn_source = thread_spawn_source(
         session.thread_id,
