@@ -12380,6 +12380,23 @@ subagent_developer_instructions = "  \t  "
     assert_eq!(resolve_multi_agent_v2_config(&config_toml), expected);
 }
 
+#[test]
+fn multi_agent_v2_can_disable_encrypted_messages() {
+    let config_toml = toml::from_str(
+        r#"[features.multi_agent_v2]
+encrypted_messages = false
+"#,
+    )
+    .expect("multi-agent v2 config should parse");
+
+    let config = resolve_multi_agent_v2_config(&config_toml);
+    assert!(!config.encrypted_messages);
+    assert_eq!(
+        config.tool_namespace.as_deref(),
+        Some(PLAINTEXT_MULTI_AGENT_V2_TOOL_NAMESPACE),
+    );
+}
+
 #[tokio::test]
 async fn multi_agent_v2_empty_usage_hint_overrides_are_preserved() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
