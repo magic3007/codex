@@ -235,6 +235,7 @@ pub(crate) const DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS: i64 = 3600 * 1000;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
 const DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE: &str = "collaboration";
+const PLAINTEXT_MULTI_AGENT_V2_TOOL_NAMESPACE: &str = "external_collaboration";
 
 pub(crate) const HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS: i64 = 0;
 pub(crate) const HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS: i64 =
@@ -1277,6 +1278,7 @@ pub struct MultiAgentV2Config {
     pub hide_spawn_agent_metadata: bool,
     pub expose_spawn_agent_model_overrides: bool,
     pub wait_agent_enabled: bool,
+    pub encrypted_messages: bool,
     pub non_code_mode_only: bool,
 }
 
@@ -1296,6 +1298,7 @@ impl MultiAgentV2Config {
             hide_spawn_agent_metadata: true,
             expose_spawn_agent_model_overrides: true,
             wait_agent_enabled: true,
+            encrypted_messages: true,
             non_code_mode_only: true,
         }
     }
@@ -2730,6 +2733,9 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
     let wait_agent_enabled = base
         .and_then(|config| config.wait_agent_enabled)
         .unwrap_or(default.wait_agent_enabled);
+    let encrypted_messages = base
+        .and_then(|config| config.encrypted_messages)
+        .unwrap_or(default.encrypted_messages);
     let subagent_developer_instructions = base
         .and_then(|config| config.subagent_developer_instructions.as_ref())
         .map(|instructions| instructions.trim().to_string());
@@ -2737,10 +2743,15 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
         .and_then(|config| config.multi_agent_mode_hint_text.as_ref())
         .cloned()
         .or(default.multi_agent_mode_hint_text);
-    let tool_namespace = base
+    let mut tool_namespace = base
         .and_then(|config| config.tool_namespace.as_ref())
         .cloned()
         .or(default.tool_namespace);
+    if !encrypted_messages
+        && tool_namespace.as_deref() == Some(DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE)
+    {
+        tool_namespace = Some(PLAINTEXT_MULTI_AGENT_V2_TOOL_NAMESPACE.to_string());
+    }
     let non_code_mode_only = base
         .and_then(|config| config.non_code_mode_only)
         .unwrap_or(default.non_code_mode_only);
@@ -2759,6 +2770,7 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
         hide_spawn_agent_metadata,
         expose_spawn_agent_model_overrides,
         wait_agent_enabled,
+        encrypted_messages,
         non_code_mode_only,
     }
 }

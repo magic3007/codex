@@ -112,8 +112,8 @@ async fn handle_spawn_agent(
     let turn = &step_context.turn;
     let arguments = function_arguments(payload)?;
     let args: SpawnAgentArgs = parse_arguments(&arguments)?;
-    let fork_mode = args.fork_mode()?;
-    let message = message_content(args.message)?;
+    let mut fork_mode = args.fork_mode()?;
+    let message = message_content(args.message, &source)?;
     let role_name = args
         .agent_type
         .as_deref()
@@ -124,7 +124,7 @@ async fn handle_spawn_agent(
     let child_depth = next_thread_spawn_depth(&session_source);
     let mut config =
         build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
-    let is_full_history_fork = matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory));
+    let requested_full_history_fork = matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory));
     apply_requested_spawn_agent_model_overrides(
         &session,
         turn.as_ref(),
@@ -133,14 +133,24 @@ async fn handle_spawn_agent(
         args.reasoning_effort.clone(),
     )
     .await?;
-    if !is_full_history_fork || role_name.is_some() {
+    if !requested_full_history_fork || role_name.is_some() {
         apply_spawn_agent_role(&session, &mut config, role_name).await?;
-        if is_full_history_fork && config.developer_instructions.is_none() {
+        if requested_full_history_fork && config.developer_instructions.is_none() {
             config
                 .developer_instructions
                 .clone_from(&turn.developer_instructions);
         }
     }
+    if config.model_provider_id != turn.config.model_provider_id && fork_mode.is_some() {
+        if args.fork_turns.is_some() {
+            return Err(FunctionCallError::RespondToModel(
+                "Cross-provider agents can't inherit parent history; use fork_turns=\"none\""
+                    .to_string(),
+            ));
+        }
+        fork_mode = None;
+    }
+    let is_full_history_fork = matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory));
     apply_spawn_agent_service_tier(&session, &mut config).await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
 

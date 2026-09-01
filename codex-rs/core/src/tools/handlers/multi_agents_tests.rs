@@ -18,6 +18,7 @@ use crate::tools::context::ToolOutput;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
 use crate::tools::handlers::multi_agents_v2::InterruptAgentHandler;
 use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
+use crate::tools::handlers::multi_agents_v2::MAX_PLAINTEXT_AGENT_MESSAGE_BYTES;
 use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
@@ -45,7 +46,6 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SandboxEnforcement;
-use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -257,6 +257,32 @@ async fn spawn_agent_rejects_empty_message() {
 }
 
 #[tokio::test]
+async fn multi_agent_v2_spawn_rejects_oversized_plaintext_message() {
+    let (session, turn) = make_session_and_context().await;
+    let mut invocation = invocation(
+        Arc::new(session),
+        Arc::new(turn),
+        "spawn_agent",
+        function_payload(json!({
+            "message": "x".repeat(MAX_PLAINTEXT_AGENT_MESSAGE_BYTES + 1),
+            "task_name": "worker",
+        })),
+    );
+    invocation.source = crate::tools::context::ToolCallSource::DirectPlaintextMessage;
+
+    let Err(err) = SpawnAgentHandlerV2::default().handle(invocation).await else {
+        panic!("oversized plaintext message should be rejected");
+    };
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(format!(
+            "Plaintext agent messages must not exceed {MAX_PLAINTEXT_AGENT_MESSAGE_BYTES} bytes"
+        ))
+    );
+}
+
+#[tokio::test]
 async fn spawn_agent_rejects_when_message_and_items_are_both_set() {
     let (session, turn) = make_session_and_context().await;
     let invocation = invocation(
@@ -371,7 +397,7 @@ async fn spawn_agent_fork_context_rejects_agent_type_override() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_spawn_fork_turns_all_applies_agent_type_override() {
+async fn multi_agent_v2_spawn_rejects_cross_provider_full_history_fork() {
     let (mut session, mut turn) = make_session_and_context().await;
     let role_name = install_role_with_model_override(&mut turn).await;
     let manager = thread_manager();
@@ -390,7 +416,7 @@ async fn multi_agent_v2_spawn_fork_turns_all_applies_agent_type_override() {
     turn.config = Arc::new(config);
     turn.multi_agent_version = codex_protocol::protocol::MultiAgentVersion::V2;
 
-    SpawnAgentHandlerV2::default()
+    let Err(err) = SpawnAgentHandlerV2::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -403,7 +429,17 @@ async fn multi_agent_v2_spawn_fork_turns_all_applies_agent_type_override() {
             })),
         ))
         .await
-        .expect("fork_turns=all should apply agent_type overrides");
+    else {
+        panic!("cross-provider full-history fork should be rejected");
+    };
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "Cross-provider agents can't inherit parent history; use fork_turns=\"none\""
+                .to_string(),
+        )
+    );
 }
 
 #[tokio::test]
@@ -772,7 +808,7 @@ async fn multi_agent_v2_full_history_fork_inherits_root_service_tier() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
+async fn multi_agent_v2_spawn_rejects_cross_provider_partial_history_fork() {
     let (mut session, mut turn) = make_session_and_context().await;
     let role_name = install_role_with_model_override(&mut turn).await;
     let manager = thread_manager();
@@ -790,9 +826,7 @@ async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
     let mut turn = turn;
     turn.config = Arc::new(config);
     turn.multi_agent_version = codex_protocol::protocol::MultiAgentVersion::V2;
-    let parent_provider_id = turn.config.model_provider_id.clone();
-
-    let output = SpawnAgentHandlerV2::default()
+    let Err(err) = SpawnAgentHandlerV2::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -805,27 +839,17 @@ async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
             })),
         ))
         .await
-        .expect("partial fork should allow agent_type overrides");
-    let (content, _) = expect_text_output(output);
-    let result: serde_json::Value =
-        serde_json::from_str(&content).expect("spawn_agent result should be json");
-    assert_eq!(result["task_name"], "/root/partial_fork");
-    let agent_id = manager
-        .captured_ops()
-        .into_iter()
-        .map(|(thread_id, _)| thread_id)
-        .find(|thread_id| *thread_id != root.thread_id)
-        .expect("spawned agent should receive an op");
-    let snapshot = manager
-        .get_thread(agent_id)
-        .await
-        .expect("spawned agent thread should exist")
-        .config_snapshot()
-        .await;
+    else {
+        panic!("cross-provider partial-history fork should be rejected");
+    };
 
-    assert_eq!(snapshot.model, "gpt-5-role-override");
-    assert_eq!(snapshot.model_provider_id, parent_provider_id);
-    assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::Minimal));
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "Cross-provider agents can't inherit parent history; use fork_turns=\"none\""
+                .to_string(),
+        )
+    );
 }
 
 #[tokio::test]
@@ -1016,7 +1040,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
             )
     }));
 
-    SendMessageHandlerV2
+    SendMessageHandlerV2::new(/*encrypt_messages*/ true)
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -1040,6 +1064,57 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
                         && communication.content.is_empty()
                         && communication.encrypted_content.as_deref() == Some("encrypted-send-message")
                         && !communication.trigger_turn
+            )
+    }));
+
+    let mut plaintext_send = invocation(
+        session.clone(),
+        turn.clone(),
+        "send_message",
+        function_payload(json!({
+            "target": "test_process",
+            "message": "plaintext-send-message"
+        })),
+    );
+    plaintext_send.source = crate::tools::context::ToolCallSource::DirectPlaintextMessage;
+    SendMessageHandlerV2::new(/*encrypt_messages*/ false)
+        .handle(plaintext_send)
+        .await
+        .expect("plaintext send_message should accept v2 path");
+
+    let mut plaintext_followup = invocation(
+        session,
+        turn,
+        "followup_task",
+        function_payload(json!({
+            "target": "test_process",
+            "message": "plaintext-followup-message"
+        })),
+    );
+    plaintext_followup.source = crate::tools::context::ToolCallSource::DirectPlaintextMessage;
+    FollowupTaskHandlerV2::new(/*encrypt_messages*/ false)
+        .handle(plaintext_followup)
+        .await
+        .expect("plaintext followup_task should accept v2 path");
+
+    assert!(manager.captured_ops().iter().any(|(id, op)| {
+        *id == child_thread_id
+            && matches!(
+                op,
+                Op::InterAgentCommunication { communication, .. }
+                    if communication.content.contains("plaintext-send-message")
+                        && communication.encrypted_content.is_none()
+                        && !communication.trigger_turn
+            )
+    }));
+    assert!(manager.captured_ops().iter().any(|(id, op)| {
+        *id == child_thread_id
+            && matches!(
+                op,
+                Op::InterAgentCommunication { communication, .. }
+                    if communication.content.contains("plaintext-followup-message")
+                        && communication.encrypted_content.is_none()
+                        && communication.trigger_turn
             )
     }));
 }
@@ -1212,7 +1287,7 @@ async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
         agent_role: None,
     });
 
-    SendMessageHandlerV2
+    SendMessageHandlerV2::new(/*encrypt_messages*/ true)
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -1288,7 +1363,7 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
         agent_role: None,
     });
 
-    let Err(err) = FollowupTaskHandlerV2
+    let Err(err) = FollowupTaskHandlerV2::new(/*encrypt_messages*/ true)
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -1670,7 +1745,10 @@ async fn multi_agent_v2_send_message_rejects_legacy_items_field() {
         })),
     );
 
-    let Err(err) = SendMessageHandlerV2.handle(invocation).await else {
+    let Err(err) = SendMessageHandlerV2::new(/*encrypt_messages*/ true)
+        .handle(invocation)
+        .await
+    else {
         panic!("legacy items field should be rejected in v2");
     };
     let FunctionCallError::RespondToModel(message) = err else {
@@ -1725,7 +1803,10 @@ async fn multi_agent_v2_send_message_rejects_interrupt_parameter() {
         })),
     );
 
-    let Err(err) = SendMessageHandlerV2.handle(invocation).await else {
+    let Err(err) = SendMessageHandlerV2::new(/*encrypt_messages*/ true)
+        .handle(invocation)
+        .await
+    else {
         panic!("send_message interrupt parameter should be rejected");
     };
     let FunctionCallError::RespondToModel(message) = err else {
@@ -1813,7 +1894,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         )
         .await;
 
-    FollowupTaskHandlerV2
+    FollowupTaskHandlerV2::new(/*encrypt_messages*/ true)
         .handle(invocation(
             session,
             turn,
@@ -1953,7 +2034,10 @@ async fn multi_agent_v2_followup_task_rejects_legacy_items_field() {
         })),
     );
 
-    let Err(err) = FollowupTaskHandlerV2.handle(invocation).await else {
+    let Err(err) = FollowupTaskHandlerV2::new(/*encrypt_messages*/ true)
+        .handle(invocation)
+        .await
+    else {
         panic!("legacy items field should be rejected in v2");
     };
     let FunctionCallError::RespondToModel(message) = err else {

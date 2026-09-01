@@ -6,7 +6,15 @@ use super::*;
 use crate::tools::handlers::multi_agents_spec::create_followup_task_tool;
 use codex_tools::ToolSpec;
 
-pub(crate) struct Handler;
+pub(crate) struct Handler {
+    encrypt_messages: bool,
+}
+
+impl Handler {
+    pub(crate) fn new(encrypt_messages: bool) -> Self {
+        Self { encrypt_messages }
+    }
+}
 
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
@@ -14,7 +22,7 @@ impl ToolExecutor<ToolInvocation> for Handler {
     }
 
     fn spec(&self) -> ToolSpec {
-        create_followup_task_tool()
+        create_followup_task_tool(self.encrypt_messages)
     }
 
     fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>

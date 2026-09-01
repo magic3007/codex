@@ -63,7 +63,9 @@ fn responses_lite_request_copies_strip_image_details() {
     let prompt = prompt_with_image_outputs();
     let original = prompt.input.clone();
 
-    let stripped = prompt.get_formatted_input_for_request(/*use_responses_lite*/ true);
+    let stripped = prompt.get_formatted_input_for_request(
+        /*use_responses_lite*/ true, /*supports_agent_messages*/ true,
+    );
 
     assert_eq!(
         stripped,
@@ -107,8 +109,65 @@ fn responses_lite_request_copies_strip_image_details() {
     );
     assert_eq!(prompt.input, original);
     assert_eq!(
-        prompt.get_formatted_input_for_request(/*use_responses_lite*/ false),
+        prompt.get_formatted_input_for_request(
+            /*use_responses_lite*/ false, /*supports_agent_messages*/ true,
+        ),
         original
+    );
+}
+
+#[test]
+fn non_openai_requests_convert_plaintext_agent_messages_to_user_messages() {
+    let prompt = Prompt {
+        input: vec![ResponseItem::AgentMessage {
+            id: None,
+            author: "/root".to_string(),
+            recipient: "/root/worker".to_string(),
+            content: vec![AgentMessageInputContent::InputText {
+                text: "Message Type: NEW_TASK\nPayload:\ndo work".to_string(),
+            }],
+            internal_chat_message_metadata_passthrough: None,
+        }],
+        ..Default::default()
+    };
+
+    assert_eq!(
+        prompt.get_formatted_input_for_request(
+            /*use_responses_lite*/ false, /*supports_agent_messages*/ false,
+        ),
+        vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Message Type: NEW_TASK\nPayload:\ndo work".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }]
+    );
+}
+
+#[test]
+fn non_openai_requests_leave_encrypted_agent_messages_unchanged() {
+    let message = ResponseItem::AgentMessage {
+        id: None,
+        author: "/root".to_string(),
+        recipient: "/root/worker".to_string(),
+        content: vec![AgentMessageInputContent::EncryptedContent {
+            encrypted_content: "ciphertext".to_string(),
+        }],
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let prompt = Prompt {
+        input: vec![message.clone()],
+        ..Default::default()
+    };
+
+    assert_eq!(
+        prompt.get_formatted_input_for_request(
+            /*use_responses_lite*/ false, /*supports_agent_messages*/ false,
+        ),
+        vec![message]
     );
 }
 

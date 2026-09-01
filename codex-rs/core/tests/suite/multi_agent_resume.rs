@@ -48,7 +48,7 @@ const INTERRUPT_PROMPT: &str = "release the interrupted worker";
 const SIBLING_NAME: &str = "survivor";
 const ROLE_NAME: &str = "durable_worker";
 const ROLE_MODEL: &str = "gpt-5.6-sol";
-const ROLE_MODEL_PROVIDER_ID: &str = "openai";
+const ROLE_MODEL_PROVIDER_ID: &str = "role-provider";
 const ROLE_DEVELOPER_INSTRUCTIONS: &str = "Keep the durable worker role configuration.";
 const SUBAGENT_DEVELOPER_INSTRUCTIONS: &str = "Use the default durable worker instructions.";
 
@@ -144,11 +144,15 @@ fn configure_multi_agent_v2_with_role(
     config.multi_agent_v2.subagent_developer_instructions =
         Some(SUBAGENT_DEVELOPER_INSTRUCTIONS.to_string());
     config.multi_agent_v2.max_concurrent_threads_per_session = 3;
+    config.model_providers.insert(
+        ROLE_MODEL_PROVIDER_ID.to_string(),
+        config.model_provider.clone(),
+    );
     let role_path = config.codex_home.join("durable-worker-role.toml");
     std::fs::write(
         &role_path,
         format!(
-            "model = \"{ROLE_MODEL}\"\nmodel_reasoning_effort = \"high\"\ndeveloper_instructions = \"{ROLE_DEVELOPER_INSTRUCTIONS}\"\nsandbox_mode = \"read-only\"\nmodel_provider = \"mock\"\n\n[model_providers.mock]\nname = \"mock\"\nbase_url = \"{model_provider_base_url}\"\nenv_key = \"PATH\"\nwire_api = \"responses\"\n"
+            "model = \"{ROLE_MODEL}\"\nmodel_reasoning_effort = \"high\"\ndeveloper_instructions = \"{ROLE_DEVELOPER_INSTRUCTIONS}\"\nsandbox_mode = \"read-only\"\nmodel_provider = \"{ROLE_MODEL_PROVIDER_ID}\"\n\n[model_providers.{ROLE_MODEL_PROVIDER_ID}]\nname = \"untrusted role override\"\nbase_url = \"{model_provider_base_url}\"\nenv_key = \"PATH\"\nwire_api = \"responses\"\n"
         ),
     )
     .expect("write durable worker role config");
@@ -298,8 +302,8 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
     }));
     assert_eq!(
         worker_thread.config().await.model_provider,
-        initial.codex.config().await.model_provider,
-        "roles must inherit the parent's complete model provider",
+        initial.config.model_providers[ROLE_MODEL_PROVIDER_ID],
+        "roles may select a provider from the parent's provider catalog",
     );
     let initial_worker_config = worker_thread.config_snapshot().await;
     let initial_worker_role_config = (
@@ -480,8 +484,8 @@ openai_base_url = "{redirected_base_url}"
         .expect("queued message should lazily reload the original worker");
     assert_eq!(
         reloaded_worker.config().await.model_provider,
-        resumed.codex.config().await.model_provider,
-        "cold reload must preserve the parent's complete model provider",
+        resumed.config.model_providers[ROLE_MODEL_PROVIDER_ID],
+        "cold reload must resolve the role provider from the parent's catalog",
     );
     resumed.submit_turn(FOLLOWUP_PROMPT).await?;
     wait_for_event(reloaded_worker.as_ref(), |event| {

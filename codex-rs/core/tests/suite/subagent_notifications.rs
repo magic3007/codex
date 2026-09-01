@@ -72,6 +72,7 @@ use wiremock::MockServer;
 const SPAWN_CALL_ID: &str = "spawn-call-1";
 const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
 const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
+const PLAINTEXT_MULTI_AGENT_V2_NAMESPACE: &str = "external_collaboration";
 const TURN_0_FORK_PROMPT: &str = "seed fork context";
 const TURN_1_PROMPT: &str = "spawn a child and continue";
 const TURN_2_NO_WAIT_PROMPT: &str = "follow up without wait";
@@ -2118,12 +2119,13 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(
         }
     }
     let spawn_args = serde_json::to_string(&spawn_args)?;
-    let mut spawn_event = ev_function_call_with_namespace(
-        SPAWN_CALL_ID,
-        MULTI_AGENT_V2_NAMESPACE,
-        "spawn_agent",
-        &spawn_args,
-    );
+    let namespace = if plaintext {
+        PLAINTEXT_MULTI_AGENT_V2_NAMESPACE
+    } else {
+        MULTI_AGENT_V2_NAMESPACE
+    };
+    let mut spawn_event =
+        ev_function_call_with_namespace(SPAWN_CALL_ID, namespace, "spawn_agent", &spawn_args);
     if plaintext {
         spawn_event["item"]["encrypted_function_args"] = json!([]);
     }
@@ -2164,16 +2166,23 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(
     } else {
         "koffing"
     };
-    let mut builder = test_codex().with_model(parent_model).with_config(|config| {
-        config
-            .features
-            .enable(Feature::Collab)
-            .expect("test config should allow feature update");
-        config
-            .features
-            .enable(Feature::MultiAgentV2)
-            .expect("test config should allow feature update");
-    });
+    let mut builder = test_codex()
+        .with_model(parent_model)
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+            config.multi_agent_v2.encrypted_messages = !plaintext;
+            if plaintext {
+                config.multi_agent_v2.tool_namespace =
+                    Some(PLAINTEXT_MULTI_AGENT_V2_NAMESPACE.to_string());
+            }
+        });
     let test = builder.build(&server).await?;
     let root_thread_id = test.session_configured.thread_id;
 
@@ -2282,6 +2291,113 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(
                 && log_field(line, "communication_id") == Some(communication_id)
         })
         .expect("correlated receive event");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multi_agent_v2_cross_provider_role_routes_plaintext_to_child_provider() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    const ROLE_NAME: &str = "third_party_worker";
+    const PROVIDER_ID: &str = "third-party";
+
+    let root_server = start_mock_server().await;
+    let child_server = start_mock_server().await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": CHILD_PROMPT,
+        "task_name": "worker",
+        "agent_type": ROLE_NAME,
+    }))?;
+    let root_spawn = mount_sse_once_match(
+        &root_server,
+        |request: &wiremock::Request| body_contains(request, TURN_1_PROMPT),
+        sse(vec![
+            ev_response_created("resp-root-spawn"),
+            ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                PLAINTEXT_MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &spawn_args,
+            ),
+            ev_completed("resp-root-spawn"),
+        ]),
+    )
+    .await;
+    let child_request = mount_sse_once_match(
+        &child_server,
+        |request: &wiremock::Request| {
+            body_contains(request, CHILD_PROMPT)
+                && request_has_input_type(request, "message")
+                && !request_has_input_type(request, "agent_message")
+        },
+        sse(vec![
+            ev_response_created("resp-child"),
+            ev_assistant_message("msg-child", "child done"),
+            ev_completed("resp-child"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &root_server,
+        |request: &wiremock::Request| body_contains(request, SPAWN_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-root-done"),
+            ev_assistant_message("msg-root-done", "done"),
+            ev_completed("resp-root-done"),
+        ]),
+    )
+    .await;
+
+    let child_base_url = format!("{}/v1", child_server.uri());
+    let test = test_codex()
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+            config.multi_agent_v2.encrypted_messages = false;
+            config.multi_agent_v2.tool_namespace =
+                Some(PLAINTEXT_MULTI_AGENT_V2_NAMESPACE.to_string());
+
+            let mut child_provider = config.model_provider.clone();
+            child_provider.name = "Third-party Responses".to_string();
+            child_provider.base_url = Some(child_base_url);
+            child_provider.env_key = None;
+            child_provider.experimental_bearer_token = None;
+            child_provider.auth = None;
+            child_provider.aws = None;
+            child_provider.requires_openai_auth = false;
+            child_provider.supports_websockets = false;
+            config
+                .model_providers
+                .insert(PROVIDER_ID.to_string(), child_provider);
+
+            let role_path = config.codex_home.join("third-party-worker.toml");
+            std::fs::write(&role_path, format!("model_provider = \"{PROVIDER_ID}\"\n"))
+                .expect("write cross-provider role config");
+            config.agent_roles.insert(
+                ROLE_NAME.to_string(),
+                AgentRoleConfig {
+                    description: Some("Third-party worker".to_string()),
+                    config_file: Some(role_path.to_path_buf()),
+                    nickname_candidates: None,
+                },
+            );
+        })
+        .build_with_auto_env(&root_server)
+        .await?;
+
+    test.submit_turn(TURN_1_PROMPT).await?;
+
+    assert_eq!(root_spawn.requests().len(), 1);
+    let request = child_request.single_request();
+    assert!(request.inputs_of_type("agent_message").is_empty());
+    assert!(request.body_contains_text(CHILD_PROMPT));
 
     Ok(())
 }
