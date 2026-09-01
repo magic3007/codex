@@ -29,11 +29,23 @@ pub(crate) struct FollowupTaskArgs {
     pub(crate) message: String,
 }
 
-pub(super) fn message_content(message: String) -> Result<String, FunctionCallError> {
+pub(super) fn message_content(
+    message: String,
+    source: &crate::tools::context::ToolCallSource,
+) -> Result<String, FunctionCallError> {
     if message.trim().is_empty() {
         return Err(FunctionCallError::RespondToModel(
             "Empty message can't be sent to an agent".to_string(),
         ));
+    }
+    if matches!(
+        source,
+        crate::tools::context::ToolCallSource::DirectPlaintextMessage
+    ) && message.len() > MAX_PLAINTEXT_AGENT_MESSAGE_BYTES
+    {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "Plaintext agent messages must not exceed {MAX_PLAINTEXT_AGENT_MESSAGE_BYTES} bytes"
+        )));
     }
     Ok(message)
 }
@@ -46,7 +58,6 @@ pub(super) async fn handle_message_string_tool(
     message: String,
     analytics: &mut ToolCallAnalytics,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
-    let message = message_content(message)?;
     let ToolInvocation {
         session,
         turn,
@@ -54,6 +65,7 @@ pub(super) async fn handle_message_string_tool(
         source,
         ..
     } = invocation;
+    let message = message_content(message, &source)?;
     let receiver_thread_id = resolve_agent_target(&session, &turn, &target).await?;
     analytics.set_receiver(receiver_thread_id);
     let resume_config =

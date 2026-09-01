@@ -1327,6 +1327,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                                 .config
                                 .multi_agent_v2
                                 .expose_spawn_agent_model_overrides,
+                            encrypt_messages: turn_context.config.multi_agent_v2.encrypted_messages,
                             multi_agent_version: turn_context.multi_agent_version,
                             usage_hint_text: turn_context
                                 .config
@@ -1347,7 +1348,9 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
             if !turn_context.config.multi_agent_v2.disable_direct_message {
                 registry.register_trusted_with_exposure(
                     multi_agent_v2_handler(
-                        SendMessageHandlerV2,
+                        SendMessageHandlerV2::new(
+                            turn_context.config.multi_agent_v2.encrypted_messages,
+                        ),
                         tool_namespace,
                         model_messages.multi_agent_tool_description_override("send_message"),
                         model_messages.multi_agent_tool_parameters_override("send_message"),
@@ -1356,7 +1359,9 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 );
                 registry.register_trusted_with_exposure(
                     multi_agent_v2_handler(
-                        FollowupTaskHandlerV2,
+                        FollowupTaskHandlerV2::new(
+                            turn_context.config.multi_agent_v2.encrypted_messages,
+                        ),
                         tool_namespace,
                         model_messages.multi_agent_tool_description_override("followup_task"),
                         model_messages.multi_agent_tool_parameters_override("followup_task"),
@@ -1408,6 +1413,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     expose_agent_type: !turn_context.config.agent_roles.is_empty(),
                     hide_agent_type_model_reasoning: false,
                     expose_spawn_agent_model_overrides: true,
+                    encrypt_messages: true,
                     multi_agent_version: turn_context.multi_agent_version,
                     usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
                 }),
