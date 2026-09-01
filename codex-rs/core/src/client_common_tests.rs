@@ -86,13 +86,13 @@ fn request_copies_project_image_details_for_receiving_model(
     model_info.use_responses_lite = false;
     model_info.supports_image_detail_original = true;
     assert_eq!(
-        prompt.get_formatted_input_for_request(&model_info),
+        prompt.get_formatted_input_for_request(&model_info, /*supports_agent_messages*/ true),
         original
     );
 
     model_info.supports_image_detail_original = false;
     assert_eq!(
-        prompt.get_formatted_input_for_request(&model_info),
+        prompt.get_formatted_input_for_request(&model_info, /*supports_agent_messages*/ true),
         prompt_with_image_outputs(unsupported_detail).input
     );
 
@@ -100,11 +100,65 @@ fn request_copies_project_image_details_for_receiving_model(
     for supports_original in [false, true] {
         model_info.supports_image_detail_original = supports_original;
         assert_eq!(
-            prompt.get_formatted_input_for_request(&model_info),
+            prompt.get_formatted_input_for_request(
+                &model_info,
+                /*supports_agent_messages*/ true
+            ),
             prompt_with_image_outputs(/*detail*/ None).input
         );
     }
     assert_eq!(prompt.input, original);
+}
+
+#[test]
+fn non_openai_requests_convert_plaintext_agent_messages_to_user_messages() {
+    let prompt = Prompt {
+        input: vec![ResponseItem::AgentMessage {
+            id: None,
+            author: "/root".to_string(),
+            recipient: "/root/worker".to_string(),
+            content: vec![AgentMessageInputContent::InputText {
+                text: "Message Type: NEW_TASK\nPayload:\ndo work".to_string(),
+            }],
+            internal_chat_message_metadata_passthrough: None,
+        }],
+        ..Default::default()
+    };
+
+    assert_eq!(
+        prompt.get_formatted_input_for_request(&model_info_from_slug("gpt-5.4"), false),
+        vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Message Type: NEW_TASK\nPayload:\ndo work".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }]
+    );
+}
+
+#[test]
+fn non_openai_requests_leave_encrypted_agent_messages_unchanged() {
+    let message = ResponseItem::AgentMessage {
+        id: None,
+        author: "/root".to_string(),
+        recipient: "/root/worker".to_string(),
+        content: vec![AgentMessageInputContent::EncryptedContent {
+            encrypted_content: "ciphertext".to_string(),
+        }],
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let prompt = Prompt {
+        input: vec![message.clone()],
+        ..Default::default()
+    };
+
+    assert_eq!(
+        prompt.get_formatted_input_for_request(&model_info_from_slug("gpt-5.4"), false),
+        vec![message]
+    );
 }
 
 #[test]

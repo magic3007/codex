@@ -41,6 +41,8 @@ mod send_message;
 mod spawn;
 pub(crate) mod wait;
 
+pub(super) const MAX_PLAINTEXT_AGENT_MESSAGE_BYTES: usize = 10_000;
+
 pub(crate) async fn emit_sub_agent_activity(
     session: &crate::session::session::Session,
     turn: &crate::session::turn_context::TurnContext,
